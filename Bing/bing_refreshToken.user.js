@@ -1,212 +1,230 @@
 // ==UserScript==
 // @name         捕获刷新令牌
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      2.0
 // @description  拦截 oauth20_desktop.srf?code=... 页面，弹出自定义对话框显示完整链接和 code 值（均可一键复制），控制台打印，并停止页面跳转。
-// @author       Yaohuo:null_null(ID28876)
-// @icon         https://bing.com/th?id=OMR.icon-96.png&amp;pid=Rewards
-// @match        *://login.live.com/oauth20_desktop.srf?*
-// @grant        GM_addStyle
+// @author       Yaohuo:null_null(ID28876), updated by Codex
+// @icon         https://bing.com/th?id=OMR.icon-96.png&pid=Rewards
+// @match        *://login.live.com/oauth20_desktop.srf*
+// @include      /^https?:\/\/login\.live\.com\/oauth20_desktop\.srf[?#].*/
+// @grant        GM_setClipboard
 // @run-at       document-start
 // @license      MIT
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
-    if (window.__codeCapturedDone) return;
-    window.__codeCapturedDone = true;
+    const capturedUrl = location.href;
+    const url = new URL(capturedUrl);
+    const codeValue = url.searchParams.get('code');
 
-    const originalUrl = window.location.href;
-    const codeMatch = originalUrl.match(/[?&]code=([^&]+)/);
-    if (!codeMatch) return;
-
-    const codeValue = decodeURIComponent(codeMatch[1]);
-    console.log('[CodeCapture] 原始链接:', originalUrl);
-    console.log('[CodeCapture] code 值:', codeValue);
-
-    // 立即停止页面加载
-    if (typeof window.stop === 'function') {
-        window.stop();
-        console.log('[CodeCapture] 已调用 window.stop()');
+    if (!codeValue || window.__oauthCodeCapturedDone) {
+        return;
     }
+    window.__oauthCodeCapturedDone = true;
 
-    // 清除所有可能触发跳转的内容
-    const cleanDocument = () => {
-        if (document.head) document.head.innerHTML = '';
-        if (document.body) {
-            const dialogContainer = document.getElementById('capture-dialog-container');
-            document.body.innerHTML = '';
-            if (dialogContainer) document.body.appendChild(dialogContainer);
+    console.log('[CodeCapture] Captured URL:', capturedUrl);
+    console.log('[CodeCapture] Captured code:', codeValue);
+
+    const autoCopyCode = () => {
+        try {
+            if (typeof GM_setClipboard === 'function') {
+                GM_setClipboard(codeValue, 'text');
+                console.log('[CodeCapture] Code copied to clipboard automatically.');
+                return true;
+            }
+        } catch (err) {
+            console.error('[CodeCapture] Auto copy failed:', err);
         }
-        // 移除所有 meta refresh
-        const metas = document.getElementsByTagName('meta');
-        for (let i = metas.length - 1; i >= 0; i--) {
-            const meta = metas[i];
-            if (meta.httpEquiv && meta.httpEquiv.toLowerCase() === 'refresh') {
-                meta.remove();
-            }
-        }
-        // 清除所有定时器
-        const highest = setTimeout(() => {}, 0);
-        for (let i = 0; i <= highest; i++) {
-            clearTimeout(i);
-            clearInterval(i);
+        return false;
+    };
+
+    const stopPage = () => {
+        try {
+            window.stop();
+        } catch (_) {
+            // Ignore browser-specific stop failures.
         }
     };
 
-    // 创建自定义对话框
-    const showDialog = () => {
-        GM_addStyle(`
-            #dialog-overlay {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: rgba(0,0,0,0.8);
-                z-index: 10000;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            #capture-dialog {
-                background: #fff;
-                width: 500px;
-                max-width: 90%;
-                border-radius: 12px;
-                padding: 24px;
-                font-family: system-ui, sans-serif;
-                box-shadow: 0 10px 25px rgba(0,0,0,0.3);
-            }
-            .capture-field {
-                margin-bottom: 20px;
-            }
-            .capture-field label {
-                font-weight: 600;
-                display: block;
-                margin-bottom: 6px;
-            }
-            .input-group {
-                display: flex;
-                gap: 8px;
-            }
-            .input-group input {
-                flex: 1;
-                padding: 8px;
-                border: 1px solid #ccc;
-                border-radius: 6px;
-                background: #f5f5f5;
-                font-family: monospace;
-                font-size: 12px;
-            }
-            .input-group button {
-                padding: 6px 12px;
-                background: #1976d2;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                cursor: pointer;
-            }
-            .close-btn {
-                text-align: right;
-                margin-top: 16px;
-            }
-            .close-btn button {
-                padding: 6px 16px;
-                background: #666;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                cursor: pointer;
-            }
-        `);
-
-        const overlay = document.createElement('div');
-        overlay.id = 'dialog-overlay';
-        const dialog = document.createElement('div');
-        dialog.id = 'capture-dialog';
-        dialog.innerHTML = `
-            <h3>🔒 已拦截 OAuth code 页面</h3>
-            <div class="capture-field">
-                <label>完整链接：</label>
-                <div class="input-group">
-                    <input type="text" id="full-url" readonly value="${escapeHtml(originalUrl)}">
-                    <button id="copy-full">复制</button>
-                </div>
-            </div>
-            <div class="capture-field">
-                <label>code 值：</label>
-                <div class="input-group">
-                    <input type="text" id="code-value" readonly value="${escapeHtml(codeValue)}">
-                    <button id="copy-code">复制</button>
-                </div>
-            </div>
-            <div class="close-btn">
-                <button id="close-dialog">关闭</button>
-            </div>
-        `;
-        overlay.appendChild(dialog);
-        document.documentElement.appendChild(overlay);
-
-        document.getElementById('copy-full')?.addEventListener('click', () => {
-            const inp = document.getElementById('full-url');
-            inp.select();
-            document.execCommand('copy');
-            alert('完整链接已复制');
-        });
-        document.getElementById('copy-code')?.addEventListener('click', () => {
-            const inp = document.getElementById('code-value');
-            inp.select();
-            document.execCommand('copy');
-            alert('code 值已复制');
-        });
-        document.getElementById('close-dialog')?.addEventListener('click', () => {
-            overlay.remove();
-        });
+    const keepCurrentUrl = () => {
+        try {
+            history.replaceState(null, '', capturedUrl);
+        } catch (_) {
+            // Some OAuth pages may lock history changes.
+        }
     };
 
-    // URL 守卫：每 100ms 检查一次，如果 URL 变化则立即改回
-    let guardInterval = null;
-    const startUrlGuard = () => {
-        guardInterval = setInterval(() => {
-            if (window.location.href !== originalUrl) {
-                console.log('[CodeCapture] 检测到 URL 变化，立即恢复:', window.location.href);
-                history.replaceState(null, '', originalUrl);
-                cleanDocument();
-                if (!document.getElementById('dialog-overlay')) {
-                    showDialog();
-                }
+    const copyText = async (text, button) => {
+        try {
+            if (typeof GM_setClipboard === 'function') {
+                GM_setClipboard(text, 'text');
+            } else if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const input = document.createElement('textarea');
+                input.value = text;
+                input.style.position = 'fixed';
+                input.style.left = '-9999px';
+                document.body.appendChild(input);
+                input.select();
+                document.execCommand('copy');
+                input.remove();
             }
-        }, 100);
+            button.textContent = '已复制';
+            setTimeout(() => {
+                button.textContent = button.dataset.label;
+            }, 1200);
+        } catch (err) {
+            console.error('[CodeCapture] Copy failed:', err);
+            alert('复制失败，请手动复制。');
+        }
     };
 
-    // 初始化
-    const init = () => {
-        cleanDocument();
-        showDialog();
-        startUrlGuard();
-        // 可选：阻止用户意外离开
-        window.addEventListener('beforeunload', (e) => {
-            if (window.location.href !== originalUrl) {
-                e.preventDefault();
-                e.returnValue = '脚本已阻止跳转，确定要离开吗？';
-            }
-        });
-    };
+    const autoCopyOk = autoCopyCode();
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OAuth Code Captured</title>
+<style>
+    * {
+        box-sizing: border-box;
     }
+    html,
+    body {
+        min-height: 100%;
+        margin: 0;
+    }
+    body {
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: #f3f6fb;
+        color: #172033;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+        width: min(760px, 100%);
+        padding: 24px;
+        border: 1px solid #d8e0ef;
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 18px 48px rgba(23, 32, 51, 0.14);
+    }
+    h1 {
+        margin: 0 0 18px;
+        font-size: 22px;
+        line-height: 1.25;
+    }
+    .field {
+        margin-top: 16px;
+    }
+    label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 700;
+    }
+    .row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+    }
+    input {
+        width: 100%;
+        min-height: 40px;
+        padding: 8px 10px;
+        border: 1px solid #b9c3d5;
+        border-radius: 6px;
+        background: #f8fafc;
+        color: #182235;
+        font: 13px ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    button {
+        min-height: 40px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 6px;
+        background: #0f6cbd;
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+    }
+    button:hover {
+        background: #0c5ca3;
+    }
+    p {
+        margin: 18px 0 0;
+        color: #536174;
+        font-size: 13px;
+    }
+    @media (max-width: 560px) {
+        main {
+            padding: 18px;
+        }
+        .row {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+</head>
+<body>
+<main>
+    <h1>已捕获 Microsoft OAuth code</h1>
+    <div class="field">
+        <label for="full-url">完整链接</label>
+        <div class="row">
+            <input id="full-url" readonly value="${escapeHtml(capturedUrl)}">
+            <button id="copy-full" data-label="复制链接">复制链接</button>
+        </div>
+    </div>
+    <div class="field">
+        <label for="code-value">code</label>
+        <div class="row">
+            <input id="code-value" readonly value="${escapeHtml(codeValue)}">
+            <button id="copy-code" data-label="复制 code">复制 code</button>
+        </div>
+    </div>
+    <p>原 OAuth 页面已被替换，页面脚本和 3 秒跳转不会继续执行。</p>
+    <p>${autoCopyOk ? 'code 已自动复制到剪贴板。' : '自动复制失败，请点击按钮手动复制 code。'}</p>
+</main>
+</body>
+</html>`;
 
-    function escapeHtml(str) {
-        return str.replace(/[&<>]/g, function(m) {
-            if (m === '&') return '&amp;';
-            if (m === '<') return '&lt;';
-            if (m === '>') return '&gt;';
-            return m;
-        });
+    stopPage();
+    keepCurrentUrl();
+
+    document.open();
+    document.write(html);
+    document.close();
+
+    stopPage();
+    keepCurrentUrl();
+
+    document.getElementById('copy-full')?.addEventListener('click', (event) => {
+        copyText(capturedUrl, event.currentTarget);
+    });
+    document.getElementById('copy-code')?.addEventListener('click', (event) => {
+        copyText(codeValue, event.currentTarget);
+    });
+
+    setInterval(() => {
+        stopPage();
+        if (location.href !== capturedUrl) {
+            keepCurrentUrl();
+        }
+    }, 250);
+
+    function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        }[char]));
     }
 })();
